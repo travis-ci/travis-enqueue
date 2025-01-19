@@ -15,9 +15,36 @@ module Travis
           def_delegators :source, :request
 
           def env_vars
+            Travis.logger.info "Starting env vars logic"
+
+            # TODO Add timestamp to the logs to check the performance with/out account envs
             vars = repository.settings.env_vars
             vars = vars.public unless secure_env?
-            vars.map { |var| env_var(var) }
+
+            mapped_vars = vars.map { |var| env_var(var) }
+            Travis.logger.info "Repo env vars processed"
+            return mapped_vars unless pull_request? && repository.fork?
+
+            # TODO Check that the build is not forked or PR
+            account_vars = account_env_vars
+            Travis.logger.info "Mapped account env vars: #{account_vars}"
+
+            repo_var_hash     = mapped_vars.map { |v| [v[:name], v] }.to_h
+            account_var_hash  = account_vars.map { |v| [v[:name], v] }.to_h
+
+            final_vars_hash = repo_var_hash.merge(account_var_hash)
+
+            final_vars = final_vars_hash.values
+            Travis.logger.info "Merged env vars: #{final_vars}"
+
+            final_vars
+          end
+
+          def account_env_vars
+            Travis.logger.info "Fetching account env vars for owner: #{job.owner_id} with owner type: #{job.owner_type}"
+            vars = AccountEnvVars.where(owner_id: job.owner_id, owner_type: job.owner_type)
+            Travis.logger.info "Results for owner: #{job.owner_id}, variables: #{vars}"
+            vars.map { |var| account_env_var(var) }
           end
 
           def secure_env?
@@ -83,6 +110,11 @@ module Travis
           def env_var(var)
             { name: var.name, value: var.value.decrypt, public: var.public, branch: var.branch }
           end
+
+          def account_env_var(var)
+            { name: var.name, value: var.value, public: var.public, branch: nil }
+          end
+
 
           def has_secure_vars?(key)
             job.config.key?(key) &&
